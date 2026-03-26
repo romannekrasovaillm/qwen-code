@@ -120,32 +120,124 @@ success "npm $(npm -v)"
 #  ШАГ 3: Форк и клонирование репозитория
 # ═══════════════════════════════════════════════════════════════════════════
 
-step "Шаг 3/7: Получение репозитория"
+step "Шаг 3/7: Установка GitHub CLI и форк репозитория"
+
+# --- 3a: Установка GitHub CLI (gh) ---
+install_gh_cli() {
+    info "Устанавливаю GitHub CLI (gh)..."
+
+    # Официальный способ установки gh на Ubuntu/Debian
+    sudo mkdir -p -m 755 /etc/apt/keyrings
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+    sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        | sudo tee /etc/apt/sources.list.d/github-cli-stable.list > /dev/null
+    sudo apt-get update -qq
+    sudo apt-get install -y gh
+}
+
+if command -v gh &>/dev/null; then
+    success "GitHub CLI уже установлен: gh $(gh --version | head -1 | awk '{print $3}')"
+else
+    install_gh_cli
+    success "GitHub CLI установлен: gh $(gh --version | head -1 | awk '{print $3}')"
+fi
+
+# --- 3b: Аутентификация в GitHub ---
+if gh auth status &>/dev/null 2>&1; then
+    success "GitHub CLI уже авторизован"
+else
+    warn "GitHub CLI не авторизован."
+    echo ""
+    echo -e "  ${YELLOW}Варианты авторизации:${NC}"
+    echo ""
+    echo -e "  ${CYAN}Вариант 1: Интерактивный логин через браузер${NC}"
+    echo "    gh auth login"
+    echo ""
+    echo -e "  ${CYAN}Вариант 2: Через персональный токен (PAT)${NC}"
+    echo "    Создайте токен: https://github.com/settings/tokens/new"
+    echo "    Права: repo, read:org, workflow"
+    echo "    Затем:"
+    echo "    echo 'ghp_ваш_токен' | gh auth login --with-token"
+    echo ""
+    echo -e "  ${CYAN}Вариант 3: Переменная окружения${NC}"
+    echo "    export GITHUB_TOKEN='ghp_ваш_токен'"
+    echo ""
+
+    read -rp "  Введите GitHub Personal Access Token (или Enter для интерактивного логина): " GH_TOKEN
+
+    if [[ -n "$GH_TOKEN" ]]; then
+        echo "$GH_TOKEN" | gh auth login --with-token
+        success "Авторизация через токен выполнена"
+    else
+        info "Запускаю интерактивный логин..."
+        gh auth login --web --git-protocol https || {
+            error "Авторизация не удалась. Выполните вручную: gh auth login"
+            error "Затем перезапустите скрипт."
+            exit 1
+        }
+        success "Интерактивная авторизация выполнена"
+    fi
+fi
+
+echo ""
+info "Текущий пользователь GitHub:"
+gh api user --jq '"  Логин: \(.login)\n  Имя:   \(.name // "не указано")"' 2>/dev/null || warn "Не удалось получить информацию о пользователе"
+
+# --- 3c: Форк репозитория ---
+UPSTREAM_REPO="QwenLM/qwen-code"  # owner/repo формат для gh
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     info "Репозиторий уже существует в $INSTALL_DIR"
     cd "$INSTALL_DIR"
     info "Обновляю до последней версии..."
     git pull origin main 2>/dev/null || git pull 2>/dev/null || warn "Не удалось обновить, продолжаю с текущей версией"
-else
-    # Если есть gh CLI — форкаем через него, иначе клонируем напрямую
-    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
-        info "GitHub CLI найден. Создаю форк..."
-        gh repo fork "$GITHUB_UPSTREAM" --clone --remote --default-branch-only || {
-            warn "Форк не удался, клонирую напрямую..."
-            git clone "$GITHUB_UPSTREAM" "$INSTALL_DIR"
-        }
-    else
-        info "GitHub CLI не найден. Клонирую репозиторий напрямую..."
-        info "Чтобы создать форк, установите gh CLI: https://cli.github.com/"
-        if [[ -d "$INSTALL_DIR" ]]; then
-            warn "$INSTALL_DIR уже существует, но без .git — пропускаю клонирование"
-        else
-            git clone "$GITHUB_UPSTREAM" "$INSTALL_DIR"
-        fi
+
+    # Проверяем что remote origin указывает на форк, а upstream на оригинал
+    if ! git remote get-url upstream &>/dev/null; then
+        info "Добавляю upstream remote..."
+        git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+        success "upstream remote добавлен"
     fi
-    cd "$INSTALL_DIR"
+else
+    info "Создаю форк ${UPSTREAM_REPO} на GitHub..."
+    GH_USER=$(gh api user --jq '.login' 2>/dev/null)
+
+    # Проверяем, существует ли уже форк
+    if gh repo view "${GH_USER}/qwen-code" &>/dev/null 2>&1; then
+        info "Форк ${GH_USER}/qwen-code уже существует, клонирую..."
+        git clone "https://github.com/${GH_USER}/qwen-code.git" "$INSTALL_DIR"
+        cd "$INSTALL_DIR"
+        git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+    else
+        # Создаём форк и клонируем одной командой
+        gh repo fork "$UPSTREAM_REPO" --clone --remote --default-branch-only -- "$INSTALL_DIR" || {
+            error "Форк не удался. Попробуйте вручную:"
+            echo "  1. Откройте https://github.com/${UPSTREAM_REPO}/fork"
+            echo "  2. Нажмите 'Create fork'"
+            echo "  3. git clone https://github.com/ВАШ_ЛОГИН/qwen-code.git $INSTALL_DIR"
+            exit 1
+        }
+        cd "$INSTALL_DIR"
+    fi
+
+    success "Форк создан и склонирован"
 fi
+
+# Синхронизируем форк с upstream
+info "Синхронизирую форк с upstream..."
+git fetch upstream main 2>/dev/null && {
+    git merge upstream/main --no-edit 2>/dev/null || warn "Merge не требуется или возник конфликт"
+    success "Форк синхронизирован с upstream"
+} || warn "Не удалось синхронизировать (upstream может быть недоступен)"
+
+# Показываем итоговое состояние remote'ов
+echo ""
+info "Настроенные remote:"
+git remote -v | while read -r line; do
+    echo "  $line"
+done
 
 success "Репозиторий готов: $(pwd)"
 success "Текущий коммит: $(git log --oneline -1)"
