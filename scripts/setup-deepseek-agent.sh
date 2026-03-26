@@ -454,8 +454,14 @@ echo "Запускаю агент с моделью DeepSeek Reasoner..."
 echo "Для выхода нажмите Ctrl+C или введите /exit"
 echo ""
 
+# Проверяем что CLI собран, если нет — собираем
+if [[ ! -f "packages/cli/dist/index.js" ]]; then
+    echo "CLI не собран, запускаю npm run build..."
+    npm run build
+fi
+
 # Запуск CLI
-node packages/cli/dist/cli.js "$@"
+node packages/cli/dist/index.js "$@"
 LAUNCHER_EOF
 chmod +x "$LAUNCHER"
 success "Скрипт запуска: $LAUNCHER"
