@@ -182,7 +182,9 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     info "Репозиторий уже существует в $INSTALL_DIR"
     cd "$INSTALL_DIR"
     info "Обновляю до последней версии..."
-    git pull origin main 2>/dev/null || git pull 2>/dev/null || warn "Не удалось обновить, продолжаю с текущей версией"
+    git fetch origin main 2>/dev/null
+    git checkout main 2>/dev/null
+    git pull origin main 2>/dev/null || warn "Не удалось обновить, продолжаю с текущей версией"
 
     # Проверяем что upstream remote настроен
     if ! git remote get-url upstream &>/dev/null; then
@@ -243,9 +245,10 @@ else
 
     # --- 3d: Клонирование форка через git ---
     CLONE_URL="https://${GH_USER}:${GITHUB_TOKEN}@github.com/${GH_USER}/${UPSTREAM_REPO}.git"
+    DEFAULT_BRANCH="main"
 
-    info "Клонирую форк..."
-    git clone "$CLONE_URL" "$INSTALL_DIR"
+    info "Клонирую форк (ветка: $DEFAULT_BRANCH)..."
+    git clone --branch "$DEFAULT_BRANCH" --single-branch "$CLONE_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 
     # Убираем токен из сохранённого remote URL (безопасность)
@@ -270,8 +273,11 @@ fi
 
 # --- 3e: Синхронизация форка с upstream ---
 info "Синхронизирую форк с upstream..."
+git fetch origin main 2>/dev/null
 git fetch upstream main 2>/dev/null && {
+    git checkout main 2>/dev/null
     git merge upstream/main --no-edit 2>/dev/null || warn "Merge не требуется или возник конфликт"
+    git push origin main 2>/dev/null || warn "Не удалось запушить в origin"
     success "Форк синхронизирован с upstream"
 } || warn "Не удалось синхронизировать (upstream может быть недоступен)"
 
